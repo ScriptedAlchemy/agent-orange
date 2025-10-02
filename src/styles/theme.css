@@ -1,0 +1,248 @@
+/* Geist Font Import */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400;500;600;700;800;900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100;200;300;400;500;600;700;800;900&display=swap");
+
+:root {
+  /* Typography */
+  --font-sans:
+    "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono:
+    "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo,
+    monospace;
+
+  /* Colors (HSL tokens for shadcn/Tailwind compatibility) */
+  --background: 0 0% 100%; /* #ffffff */
+  --foreground: 0 0% 0%; /* #000000 */
+
+  /* Card & Surfaces */
+  --card: 0 0% 98%; /* #fafafa */
+  --card-foreground: 0 0% 0%; /* #000000 */
+
+  /* Popover */
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 0%;
+
+  /* Sidebar (for shadcn sidebar components) */
+  --sidebar: 0 0% 96%; /* #f5f5f5 */
+  --sidebar-foreground: 0 0% 0%;
+  --sidebar-accent: 0 0% 90%; /* #e5e5e5 */
+  --sidebar-accent-foreground: 0 0% 0%;
+  --sidebar-border: 0 0% 90%; /* #e5e5e5 */
+  --sidebar-ring: 0 0% 0%;
+
+  /* Borders & Inputs */
+  --border: 0 0% 90%; /* #e5e5e5 */
+  --input: 0 0% 90%; /* #e5e5e5 */
+  --ring: 0 0% 0%; /* #000000 */
+
+  /* Brand/semantic */
+  --primary: 221 83% 53%; /* brand blue */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 45%; /* #737373 */
+  --secondary-foreground: 0 0% 100%;
+  --muted: 0 0% 96%; /* #f5f5f5 */
+  --muted-foreground: 0 0% 45%;
+  --accent: 0 0% 96%;
+  --accent-foreground: 0 0% 0%;
+  --destructive: 0 84% 65%; /* #ef4444 */
+  --destructive-foreground: 0 0% 100%;
+
+  /* Charts (shadcn convention) */
+  --chart-1: 221 83% 53%; /* blue-600 */
+  --chart-2: 142 76% 36%; /* green-600 */
+  --chart-3: 27 96% 61%; /* amber-500 */
+  --chart-4: 262 83% 58%; /* violet-600 */
+  --chart-5: 348 83% 47%; /* rose-600 */
+
+  /* Spacing */
+  --spacing: 0.25rem;
+  --spacing-xs: calc(var(--spacing) * 1); /* 0.25rem */
+  --spacing-sm: calc(var(--spacing) * 2); /* 0.5rem */
+  --spacing-md: calc(var(--spacing) * 4); /* 1rem */
+  --spacing-lg: calc(var(--spacing) * 6); /* 1.5rem */
+  --spacing-xl: calc(var(--spacing) * 8); /* 2rem */
+  --spacing-2xl: calc(var(--spacing) * 12); /* 3rem */
+  --spacing-3xl: calc(var(--spacing) * 16); /* 4rem */
+
+  /* Radius */
+  --radius: 0.5rem;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Dark Mode Support */
+.dark {
+  --background: 0 0% 0%; /* #000 */
+  --foreground: 0 0% 100%; /* #fff */
+
+  --card: 0 0% 3.9%; /* #0a0a0a */
+  --card-foreground: 0 0% 100%;
+
+  --popover: 0 0% 3.9%;
+  --popover-foreground: 0 0% 100%;
+
+  --border: 0 0% 15%; /* #262626 */
+  --input: 0 0% 15%;
+  --ring: 0 0% 100%;
+
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 0 0% 64%; /* #a3a3a3 */
+  --secondary-foreground: 0 0% 0%;
+
+  --muted: 0 0% 9%; /* #171717 */
+  --muted-foreground: 0 0% 64%;
+
+  --accent: 0 0% 9%;
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 72% 50%; /* #dc2626 approx */
+  --destructive-foreground: 0 0% 100%;
+
+  /* Sidebar (dark) */
+  --sidebar: 0 0% 3.9%;
+  --sidebar-foreground: 0 0% 100%;
+  --sidebar-accent: 0 0% 9%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-border: 0 0% 15%;
+  --sidebar-ring: 0 0% 100%;
+  /* Optional sidebar primary emphasis */
+  --sidebar-primary: 221 83% 53%;
+  --sidebar-primary-foreground: 0 0% 100%;
+}
+
+/* Base Styles */
+* {
+  border-color: var(--border);
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+/* Typography Classes */
+.font-sans {
+  font-family: var(--font-sans);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Spacing Utilities */
+.space-xs {
+  margin: var(--spacing-xs);
+}
+.space-sm {
+  margin: var(--spacing-sm);
+}
+.space-md {
+  margin: var(--spacing-md);
+}
+.space-lg {
+  margin: var(--spacing-lg);
+}
+.space-xl {
+  margin: var(--spacing-xl);
+}
+.space-2xl {
+  margin: var(--spacing-2xl);
+}
+.space-3xl {
+  margin: var(--spacing-3xl);
+}
+
+.p-xs {
+  padding: var(--spacing-xs);
+}
+.p-sm {
+  padding: var(--spacing-sm);
+}
+.p-md {
+  padding: var(--spacing-md);
+}
+.p-lg {
+  padding: var(--spacing-lg);
+}
+.p-xl {
+  padding: var(--spacing-xl);
+}
+.p-2xl {
+  padding: var(--spacing-2xl);
+}
+.p-3xl {
+  padding: var(--spacing-3xl);
+}
+
+/* Component Overrides for Black & White Theme */
+.bg-background {
+  background-color: hsl(var(--background));
+}
+.bg-foreground {
+  background-color: hsl(var(--foreground));
+}
+.bg-card {
+  background-color: hsl(var(--card));
+}
+.bg-popover {
+  background-color: hsl(var(--popover));
+}
+.bg-primary {
+  background-color: hsl(var(--primary));
+}
+.bg-secondary {
+  background-color: hsl(var(--secondary));
+}
+.bg-muted {
+  background-color: hsl(var(--muted));
+}
+.bg-accent {
+  background-color: hsl(var(--accent));
+}
+
+.text-foreground {
+  color: hsl(var(--foreground));
+}
+.text-popover-foreground {
+  color: hsl(var(--popover-foreground));
+}
+.text-primary {
+  color: hsl(var(--primary));
+}
+.text-secondary {
+  color: hsl(var(--secondary));
+}
+.text-muted-foreground {
+  color: hsl(var(--muted-foreground));
+}
+
+.border {
+  border-color: hsl(var(--border));
+}
+.border-input {
+  border-color: hsl(var(--input));
+}
+
+/* Smooth Transitions */
+* {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Layout Utilities */
+/* Full viewport height minus fixed site header (48px) */
+.h-screen-minus-header {
+  height: calc(100vh - 48px);
+  /* Prefer dynamic viewport units on modern browsers */
+  height: calc(100dvh - 48px);
+}
