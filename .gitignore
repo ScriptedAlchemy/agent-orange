@@ -1,0 +1,51 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Data & caches
+data/
+.cache/
+
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+dist-ssr/
+web-dist/
+server-dist/
+coverage/
+
+# Local env & machine files
+*.local
+.DS_Store
+.idea/
+
+# Editor settings
+.vscode/*
+!.vscode/extensions.json
+
+# Windows & IDE artifacts
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# E2E test artifacts
+test-results/
+playwright-report/
+test/e2e/screenshots/*.png
+e2e-report.json
+
+# Misc project ignores
+.claude/
+*.backup.ts
+*-fix.ts
+repomix-output.xml
+ign
