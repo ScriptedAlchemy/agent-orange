@@ -54,7 +54,30 @@ interface CliSessionRecord extends CliSessionInfo {
 }
 
 const BUFFER_LIMIT = 64 * 1024 // 64KB snapshot buffer
-const SESSION_IDLE_TIMEOUT = 60 * 60 * 1000 // 1 hour
+const ESC = "\u001b"
+
+/**
+ * Trim a terminal buffer to start at a relatively safe boundary.
+ * Preference order:
+ * 1) The next ESC byte (start of an ANSI control sequence)
+ * 2) The next newline (\n) or carriage return (\r)
+ * 3) Hard slice to last BUFFER_LIMIT bytes as a fallback
+ *
+ * This avoids beginning the snapshot mid-CSI (e.g. showing literals like
+ * "48;2;39;46;63m") when clients reconnect and the server sends buffered data.
+ */
+function trimToSafeStart(buf: string): string {
+  if (buf.length <= BUFFER_LIMIT) return buf
+  const start = buf.length - BUFFER_LIMIT
+  const nextEsc = buf.indexOf(ESC, start)
+  if (nextEsc !== -1) return buf.slice(nextEsc)
+  const nextNl = buf.indexOf("\n", start)
+  if (nextNl !== -1) return buf.slice(nextNl + 1)
+  const nextCr = buf.indexOf("\r", start)
+  if (nextCr !== -1) return buf.slice(nextCr + 1)
+  return buf.slice(buf.length - BUFFER_LIMIT)
+}
+const SESSION_IDLE_TIMEOUT = 48 * 60 * 60 * 1000 // 48 hours
 const MAX_SESSIONS_PER_PROJECT = 10
 const MAX_TOTAL_SESSIONS = 50
 const PTY_KILL_TIMEOUT = 5000 // 5 seconds to wait for graceful exit
@@ -272,7 +295,7 @@ export class CliSessionManager {
     }
 
     session.sockets.add(socket)
-    const snapshot = session.buffer
+    const snapshot = trimToSafeStart(session.buffer)
     if (snapshot.length > 0) {
       socket.send(JSON.stringify({ type: "snapshot", data: snapshot }))
     }
@@ -380,7 +403,7 @@ export class CliSessionManager {
   private appendBuffer(session: CliSessionRecord, chunk: string) {
     session.buffer += chunk
     if (session.buffer.length > BUFFER_LIMIT) {
-      session.buffer = session.buffer.slice(session.buffer.length - BUFFER_LIMIT)
+      session.buffer = trimToSafeStart(session.buffer)
     }
   }
 
