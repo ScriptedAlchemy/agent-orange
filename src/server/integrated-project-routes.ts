@@ -117,6 +117,15 @@ const GitHubPullStatusRequestSchema = z.object({
   repo: GitHubRepoSchema,
 })
 
+const ProjectSettingsUpdateSchema = z.object({
+  codex: z
+    .object({
+      autoPrompt: z.boolean().optional(),
+      promptCharLimit: z.number().int().min(1000).max(20000).optional(),
+    })
+    .optional(),
+})
+
 // (OpenAPI schemas removed during rewrite)
 
 const formatGitHubError = (error: unknown): string => {
@@ -1177,6 +1186,36 @@ export function addIntegratedProjectRoutes(app: Hono) {
               400
             )
           }
+        }
+      )
+
+      // GET /api/projects/:id/settings - retrieve project settings
+      .get(
+        "/api/projects/:id/settings",
+        zValidator("param", z.object({ id: z.string() })),
+        async (c) => {
+          const { id } = c.req.valid("param")
+          const settings = projectManager.getProjectSettings(id)
+          if (!settings) {
+            return c.json({ error: "Project not found" }, 404)
+          }
+          return c.json(settings)
+        }
+      )
+
+      // PATCH /api/projects/:id/settings - update project settings
+      .patch(
+        "/api/projects/:id/settings",
+        zValidator("param", z.object({ id: z.string() })),
+        zValidator("json", ProjectSettingsUpdateSchema),
+        async (c) => {
+          const { id } = c.req.valid("param")
+          const body = c.req.valid("json")
+          const updated = projectManager.updateProjectSettings(id, body)
+          if (!updated) {
+            return c.json({ error: "Project not found" }, 404)
+          }
+          return c.json(updated)
         }
       )
 

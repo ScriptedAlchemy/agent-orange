@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { FolderGit2, PanelsTopLeft, PlugZap, GitBranch, LayoutPanelLeft } from "lucide-react"
+import { FolderGit2, PanelsTopLeft, PlugZap, GitBranch, LayoutPanelLeft, Settings } from "lucide-react"
 import { ProjectRail } from "@/features/projects/ProjectRail"
 import { WorktreeBoard } from "@/features/worktrees/WorktreeBoard"
 import { CliSessionDock } from "@/features/cli/CliSessionDock"
@@ -11,6 +11,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { CreateWorktreeDialog } from "@/features/worktrees/CreateWorktreeDialog"
 import { CreateSessionDialog } from "@/features/cli/CreateSessionDialog"
 import { useWorktreesForProject } from "@/stores/worktrees"
+import { ProjectSettingsPanel } from "@/features/settings/ProjectSettingsPanel"
 
 export default function OperationsHub() {
   const { loadProjects } = useProjectsActions()
@@ -22,6 +23,7 @@ export default function OperationsHub() {
   const [sessionsOpen, setSessionsOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [newWorktreeOpen, setNewWorktreeOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // Initialize persisted project rail width
   useEffect(() => {
     try {
@@ -125,6 +127,9 @@ export default function OperationsHub() {
             <Button size="sm" variant="outline" onClick={() => setSessionsOpen(true)} title="Sessions" data-testid="btn-sessions">
               <PanelsTopLeft className="mr-2 h-4 w-4" /> Sessions
             </Button>
+            <Button size="sm" variant="outline" onClick={() => setSettingsOpen(true)} title="Settings" data-testid="btn-settings">
+              <Settings className="mr-2 h-4 w-4" /> Settings
+            </Button>
             <div className="ml-auto flex items-center gap-2">
               <Button size="sm" variant="default" onClick={() => setNewSessionOpen(true)} data-testid="open-new-session">
                 <PlugZap className="mr-2 h-4 w-4" /> New Session
@@ -165,13 +170,37 @@ export default function OperationsHub() {
         <SheetTrigger asChild><span className="hidden" /></SheetTrigger>
         <SheetContent
           side="right"
-          className="sm:max-w-none w-[420px] p-0 top-[var(--header-height)] h-[calc(100vh-var(--header-height))] z-50"
+          className="sm:max-w-none w-full p-0 top-[var(--header-height)] h-[calc(100vh-var(--header-height))] border-l z-50"
           data-testid="sessions-sheet"
         >
           <SheetHeader className="border-b px-4 py-3">
             <SheetTitle className="flex items-center gap-2"><PanelsTopLeft className="h-4 w-4" /> Sessions</SheetTitle>
           </SheetHeader>
           <CliSessionDock className="h-[calc(100%-49px)]" />
+        </SheetContent>
+      </Sheet>
+
+      {/* Settings sheet */}
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetTrigger asChild><span className="hidden" /></SheetTrigger>
+        <SheetContent
+          side="right"
+          className="sm:max-w-[520px] w-full p-0 top-[var(--header-height)] h-[calc(100vh-var(--header-height))] border-l z-50"
+          data-testid="settings-sheet"
+        >
+          <SheetHeader className="border-b px-4 py-3">
+            <SheetTitle className="text-sm font-semibold">Project Settings</SheetTitle>
+            <SheetDescription className="text-xs text-muted-foreground">
+              Fine-tune automation defaults for this project.
+            </SheetDescription>
+          </SheetHeader>
+          {project ? (
+            <ProjectSettingsPanel projectId={project.id} />
+          ) : (
+            <div className="flex h-full items-center justify-center px-4 text-sm text-muted-foreground">
+              Select a project to view settings.
+            </div>
+          )}
         </SheetContent>
       </Sheet>
 

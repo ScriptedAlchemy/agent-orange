@@ -11,6 +11,13 @@ export interface WorktreeMetadata {
   title: string
 }
 
+export interface ProjectSettings {
+  codex: {
+    autoPrompt: boolean
+    promptCharLimit: number
+  }
+}
+
 export interface ProjectInfo {
   id: string
   name: string
@@ -22,6 +29,7 @@ export interface ProjectInfo {
   // port removed - client connects directly to OpenCode backend
   port?: number
   worktrees?: WorktreeMetadata[]
+  settings?: ProjectSettings
 }
 
 export interface ProjectInstance {
@@ -85,6 +93,25 @@ export class ProjectManager {
     )
   }
 
+  private applyDefaultSettings(settings?: ProjectSettings): ProjectSettings {
+    const DEFAULT_PROMPT_LIMIT = 8000
+    const MIN_PROMPT_LIMIT = 1000
+    const MAX_PROMPT_LIMIT = 20000
+
+    const currentLimit = settings?.codex?.promptCharLimit ?? DEFAULT_PROMPT_LIMIT
+    const normalizedLimit = Math.min(
+      MAX_PROMPT_LIMIT,
+      Math.max(MIN_PROMPT_LIMIT, Math.floor(currentLimit))
+    )
+
+    return {
+      codex: {
+        autoPrompt: settings?.codex?.autoPrompt ?? true,
+        promptCharLimit: normalizedLimit,
+      },
+    }
+  }
+
   private ensureDefaultWorktree(info: ProjectInfo): void {
     const normalizedProjectPath = this.canonicalizePath(info.path)
     info.path = normalizedProjectPath
@@ -95,22 +122,23 @@ export class ProjectManager {
     const existingDefault = info.worktrees.find((worktree) => worktree.id === "default")
     if (existingDefault) {
       existingDefault.path = normalizedProjectPath
-      if (!existingDefault.title) {
-        existingDefault.title = `${info.name} (default)`
-      }
+      // Enforce a stable, non-custom label for the default
+      existingDefault.title = "default"
     } else {
       info.worktrees.push({
         id: "default",
         path: normalizedProjectPath,
-        title: `${info.name} (default)`,
+        title: "default",
       })
     }
 
     info.worktrees = info.worktrees.map((worktree) => ({
       ...worktree,
       path: this.canonicalizePath(worktree.path || normalizedProjectPath),
-      title: worktree.title || worktree.id,
+      // Keep default's title fixed as "default"; otherwise ensure a non-empty title
+      title: worktree.id === "default" ? "default" : worktree.title || worktree.id,
     }))
+    info.settings = this.applyDefaultSettings(info.settings)
   }
 
   private markDirty(): void {
@@ -232,6 +260,7 @@ export class ProjectManager {
     const projects = Array.from(this.projects.values()).map((instance) => ({
       ...instance.info,
       status: "stopped", // Always save as stopped
+      settings: this.applyDefaultSettings(instance.info.settings),
     }))
 
     const data = { projects }
@@ -321,9 +350,10 @@ export class ProjectManager {
         {
           id: "default",
           path: canonicalPath,
-          title: `${name || fallbackName} (default)`.trim(),
+          title: "default",
         },
       ],
+      settings: this.applyDefaultSettings(),
     }
 
     this.ensureDefaultWorktree(projectInfo)
@@ -335,6 +365,41 @@ export class ProjectManager {
 
     this.log.info(`Added project: ${projectInfo.name} (${projectId})`)
     return projectInfo
+  }
+
+  getProjectSettings(projectId: string): ProjectSettings | null {
+    const instance = this.projects.get(projectId)
+    if (!instance) {
+      return null
+    }
+    instance.info.settings = this.applyDefaultSettings(instance.info.settings)
+    return instance.info.settings
+  }
+
+  updateProjectSettings(projectId: string, partial: Partial<ProjectSettings>): ProjectSettings | null {
+    const instance = this.projects.get(projectId)
+    if (!instance) {
+      return null
+    }
+
+    const current = this.applyDefaultSettings(instance.info.settings)
+    const merged: ProjectSettings = {
+      codex: {
+        autoPrompt:
+          partial.codex?.autoPrompt !== undefined
+            ? partial.codex.autoPrompt
+            : current.codex.autoPrompt,
+        promptCharLimit:
+          partial.codex?.promptCharLimit !== undefined
+            ? partial.codex.promptCharLimit
+            : current.codex.promptCharLimit,
+      },
+    }
+
+    instance.info.settings = this.applyDefaultSettings(merged)
+    this.markDirty()
+    void this.saveProjects()
+    return instance.info.settings
   }
 
   async removeProject(projectId: string): Promise<boolean> {

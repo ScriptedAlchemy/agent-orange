@@ -30,6 +30,7 @@ export interface CreateCliSessionParams {
   tool: string
   title?: string
   commandArgs?: string[]
+  initialInput?: string
 }
 
 interface CliSessionsState {

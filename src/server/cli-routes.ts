@@ -11,6 +11,7 @@ const CreateSessionSchema = z.object({
   tool: z.enum(["codex", "claude", "opencode"]),
   title: z.string().optional(),
   commandArgs: z.array(z.string()).optional(),
+  initialInput: z.string().max(4000).optional(),
 })
 
 export function registerCliRoutes(app: Hono) {
@@ -51,6 +52,7 @@ export function registerCliRoutes(app: Hono) {
           tool: body.tool,
           title: body.title,
           commandArgs: body.commandArgs,
+          initialInput: body.initialInput,
         })
         const wsToken = generateSessionToken(session.id)
         return c.json({ session, wsToken }, 201)

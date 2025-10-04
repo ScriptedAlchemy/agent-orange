@@ -12,6 +12,7 @@ export interface Project {
   lastOpened?: string | null
   status?: "running" | "stopped"
   worktrees?: Worktree[]
+  settings?: ProjectSettings
 }
 
 export interface CreateProjectParams {
@@ -34,6 +35,13 @@ export interface Worktree {
   isDetached: boolean
   isLocked: boolean
   lockReason?: string
+}
+
+export interface ProjectSettings {
+  codex: {
+    autoPrompt: boolean
+    promptCharLimit: number
+  }
 }
 
 export interface CreateWorktreeParams {

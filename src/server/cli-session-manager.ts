@@ -31,6 +31,7 @@ export interface CreateCliSessionInput {
   tool: CliToolId
   title?: string
   commandArgs?: string[]
+  initialInput?: string
 }
 
 export interface CliSessionInfo {
@@ -270,6 +271,19 @@ export class CliSessionManager {
         this.broadcast(record, { type: "status", status: "running" })
       }
     })
+
+    if (input.initialInput && input.initialInput.trim().length > 0) {
+      const payload = input.initialInput.endsWith("\n") || input.initialInput.endsWith("\r")
+        ? input.initialInput
+        : `${input.initialInput}\n`
+      setTimeout(() => {
+        const active = this.sessions.get(id)
+        if (!active) {
+          return
+        }
+        this.write(id, payload)
+      }, 750)
+    }
 
     return this.toInfo(record)
   }

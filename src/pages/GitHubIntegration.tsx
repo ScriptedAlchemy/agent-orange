@@ -39,9 +39,12 @@ import rehypeRaw from "rehype-raw"
 import rehypeSanitize from "rehype-sanitize"
 import { useWorktreesStore } from "@/stores/worktrees"
 import { useCliSessionsStore } from "@/stores/cliSessions"
+import { useProjectSettingsStore, useProjectSettings, getDefaultSettings } from "@/stores/projectSettings"
 import { cn } from "@/lib/utils"
 import { formatDistanceToNowStrict } from "date-fns"
 import ReactMarkdown from "react-markdown"
+
+const DEFAULT_PROMPT_LIMIT = 8000
 
 interface PullRequestStatusMap {
   [pullNumber: number]: PullRequestStatusSummary | null
@@ -206,6 +209,82 @@ function GitHubCommentList({ comments }: { comments: CommentDisplay[] }) {
   )
 }
 
+function truncateForPrompt(text: string, limit = DEFAULT_PROMPT_LIMIT) {
+  if (!text) return ""
+  const normalized = text.replace(/\r/g, "").trim()
+  if (normalized.length <= limit) {
+    return normalized
+  }
+  return `${normalized.slice(0, Math.max(0, limit - 1)).trim()}…`
+}
+
+function formatLabelsForPrompt(labels: GitHubLabel[]) {
+  if (!labels?.length) return "None"
+  return labels.map((label) => label.name).join(", ")
+}
+
+function renderCommentsForPrompt(comments: GitHubIssueComment[], limit = 3, perCommentLimit = 320) {
+  if (!comments?.length) return "(no additional comments)"
+  const slices = comments.slice(0, limit).map((comment) => {
+    const author = comment.user?.login ?? "unknown"
+    const body = truncateForPrompt(stripMarkdown(comment.body ?? ""), perCommentLimit)
+    const updated = comment.updated_at || comment.created_at
+    return `- ${author} (${updated}): ${body}`
+  })
+  const extra = comments.length > limit ? `\n- …and ${comments.length - limit} more comments` : ""
+  return `${slices.join("\n")}${extra}`
+}
+
+function buildIssuePrompt(options: {
+  repo: GitHubRepoRef
+  issue: GitHubIssue
+  description: string
+  comments?: GitHubIssueComment[]
+  mode: "research" | "fix"
+  limit: number
+}) {
+  const { repo, issue, description, comments = [], mode, limit } = options
+  const bodyPlain = truncateForPrompt(stripMarkdown(description || issue.body || ""), limit)
+  const commentsBlock = renderCommentsForPrompt(comments, 3, Math.max(200, Math.floor(limit / 6)))
+  const instruction =
+    mode === "research"
+      ? `Task: Research GitHub issue #${issue.number}. Understand the context, identify likely root causes, and outline next investigative steps before making code changes.`
+      : `Task: Fix GitHub issue #${issue.number}. Outline a plan, implement the required code and tests, and prepare a summary of changes.`
+
+  return (
+    `You are working in repository ${repo.owner}/${repo.repo}.\n` +
+    `${instruction}\n\n` +
+    `Issue URL: ${issue.html_url}\n` +
+    `Title: ${issue.title}\n` +
+    `Labels: ${formatLabelsForPrompt(issue.labels)}\n` +
+    `Reported by: ${issue.user?.login ?? "unknown"} on ${issue.created_at}\n\n` +
+    `Issue body:\n${bodyPlain || "(no description provided)"}\n\n` +
+    `Recent comments:\n${commentsBlock}\n\n` +
+    `Begin by acknowledging the issue and stating your immediate next steps. Answer succinctly, using the Codex CLI command set where appropriate.\n`
+  )
+}
+
+function buildPullPrompt(options: {
+  repo: GitHubRepoRef
+  pull: GitHubPullRequest
+  description: string
+  limit: number
+}) {
+  const { repo, pull, description, limit } = options
+  const bodyPlain = truncateForPrompt(stripMarkdown(description || pull.body || ""), limit)
+  return (
+    `You are working in repository ${repo.owner}/${repo.repo}.\n` +
+    `Task: Investigate and fix issues for PR #${pull.number}. Ensure the PR becomes merge-ready.\n\n` +
+    `PR URL: ${pull.html_url}\n` +
+    `Title: ${pull.title}\n` +
+    `Author: ${pull.user?.login ?? "unknown"}\n` +
+    `Source branch: ${pull.head.label} (ref ${pull.head.ref})\n` +
+    `Target branch: ${pull.base.label} (ref ${pull.base.ref})\n\n` +
+    `PR description:\n${bodyPlain || "(no description provided)"}\n\n` +
+    `Begin by summarizing the current state of the PR, then outline what needs to be done to fix it. Use the Codex CLI command set to inspect the branch and make changes.`
+  )
+}
+
 function renderStatusIndicator(status?: PullRequestStatusSummary | null) {
   if (!status) {
     return (
@@ -261,6 +340,9 @@ export default function GitHubIntegration() {
   const [lazyLoading, setLazyLoading] = useState<Record<string, boolean>>({})
   const [statusOverrides, setStatusOverrides] = useState<Record<number, PullRequestStatusSummary | null>>({})
   const resolvedWorktreeId = worktreeId || "default"
+
+  const loadProjectSettings = useProjectSettingsStore((state) => state.loadSettings)
+  const projectSettings = useProjectSettings(projectId)
 
   const gitStatusQuery = useQuery<GitStatusResponse>({
     queryKey: ["git-status", projectId, resolvedWorktreeId],
@@ -458,6 +540,7 @@ export default function GitHubIntegration() {
         branch: string
         title: string
         sessionTitle: string
+        initialInput?: string
       }
     ) => {
       if (!projectId) {
@@ -486,6 +569,7 @@ export default function GitHubIntegration() {
           worktreeId: worktree.id,
           tool: "codex",
           title: truncate(params.sessionTitle),
+          initialInput: params.initialInput,
         })
         navigate("/")
       } catch (error) {
@@ -505,31 +589,57 @@ export default function GitHubIntegration() {
       const branch =
         action === "research" ? `research/issue-${issue.number}` : `fix/issue-${issue.number}`
       const titlePrefix = action === "research" ? "Research" : "Fix"
+      const issueContent = issueContentMap[issue.number]
+      const prompt = shouldAutoPrompt && repoRef
+        ? buildIssuePrompt({
+            repo: repoRef,
+            issue,
+            description: issueContent?.item.body ?? issue.body ?? "",
+            comments: issueContent?.comments ?? [],
+            mode: action,
+            limit: promptLimit,
+          })
+        : undefined
       await runAction(key, {
         branch,
         title: `${titlePrefix} Issue #${issue.number}`,
         sessionTitle: `${titlePrefix} Issue #${issue.number}: ${issue.title}`,
+        initialInput: prompt,
       })
     },
-    [runAction]
+    [runAction, issueContentMap, repoRef, shouldAutoPrompt, promptLimit]
   )
 
   const handlePullRequestFix = useCallback(
     async (pullRequest: GitHubPullRequest) => {
       const key = buildActionKey("pr", pullRequest.number, "fix")
+      const pullContent = pullContentMap[pullRequest.number]
+      const prompt = shouldAutoPrompt && repoRef
+        ? buildPullPrompt({
+            repo: repoRef,
+            pull: pullRequest,
+            description: pullContent?.item.body ?? pullRequest.body ?? "",
+            limit: promptLimit,
+          })
+        : undefined
       await runAction(key, {
         branch: `fix/pr-${pullRequest.number}`,
         title: `Fix PR #${pullRequest.number}`,
         sessionTitle: `Fix PR #${pullRequest.number}: ${pullRequest.title}`,
+        initialInput: prompt,
       })
     },
-    [runAction]
+    [runAction, pullContentMap, repoRef, shouldAutoPrompt, promptLimit]
   )
 
   const anyActionInFlight = Object.values(actionStates).some(Boolean)
   const repoLabel = repoRef ? `${repoRef.owner}/${repoRef.repo}` : null
   const showLoadMoreIssues = issues.length >= issuePageSize
   const showLoadMorePulls = pullRequests.length >= pullPageSize
+
+  const effectiveSettings = projectSettings ?? getDefaultSettings()
+  const shouldAutoPrompt = effectiveSettings.codex.autoPrompt
+  const promptLimit = effectiveSettings.codex.promptCharLimit
 
   const handleLoadMoreIssues = useCallback(() => {
     setIssuePageSize((prev) => prev + ISSUES_PAGE_STEP)
@@ -670,6 +780,12 @@ export default function GitHubIntegration() {
     setLazyLoading({})
     setStatusOverrides({})
   }, [repoRef?.owner, repoRef?.repo])
+
+  useEffect(() => {
+    if (projectId) {
+      void loadProjectSettings(projectId)
+    }
+  }, [projectId, loadProjectSettings])
 
   const repositoryTabs = useMemo(
     () => [
