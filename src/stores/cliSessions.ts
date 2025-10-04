@@ -44,6 +44,7 @@ interface CliSessionsState {
   closeSession: (id: string) => Promise<void>
   setActiveSession: (id: string | null) => void
   updateSessionStatus: (id: string, status: CliSession["status"]) => void
+  removeSessionLocal: (id: string) => void
 }
 
 const parseError = (error: unknown): string => {
@@ -136,6 +137,22 @@ export const useCliSessionsStore = create<CliSessionsState>()(
     },
 
     closeSession: async (id: string) => {
+      let removedSession: CliSession | null = null
+      let removedIndex = -1
+      let removedWasActive = false
+
+      set((state) => {
+        const index = state.sessions.findIndex((session) => session.id === id)
+        if (index !== -1) {
+          removedSession = { ...state.sessions[index] }
+          removedIndex = index
+          state.sessions.splice(index, 1)
+        }
+        if (state.activeSessionId === id) {
+          state.activeSessionId = null
+          removedWasActive = true
+        }
+      })
       try {
         const response = await fetch(`/api/cli/sessions/${encodeURIComponent(id)}`, {
           method: "DELETE",
@@ -144,16 +161,24 @@ export const useCliSessionsStore = create<CliSessionsState>()(
           const text = await response.text().catch(() => "")
           throw new Error(text || "Failed to close session")
         }
-        set((state) => {
-          state.sessions = state.sessions.filter((session) => session.id !== id)
-          if (state.activeSessionId === id) {
-            state.activeSessionId = null
-          }
-        })
       } catch (error) {
-        set((state) => {
-          state.error = parseError(error)
-        })
+        if (removedSession) {
+          set((state) => {
+            const alreadyPresent = state.sessions.some((session) => session.id === id)
+            if (!alreadyPresent) {
+              const insertAt = removedIndex >= 0 ? Math.min(removedIndex, state.sessions.length) : state.sessions.length
+              state.sessions.splice(insertAt, 0, removedSession as CliSession)
+              if (removedWasActive || !state.activeSessionId) {
+                state.activeSessionId = removedSession?.id ?? null
+              }
+            }
+            state.error = parseError(error)
+          })
+        } else {
+          set((state) => {
+            state.error = parseError(error)
+          })
+        }
       }
     },
 
@@ -169,6 +194,15 @@ export const useCliSessionsStore = create<CliSessionsState>()(
         if (session) {
           session.status = status
           session.updatedAt = new Date().toISOString()
+        }
+      })
+    },
+
+    removeSessionLocal: (id) => {
+      set((state) => {
+        state.sessions = state.sessions.filter((session) => session.id !== id)
+        if (state.activeSessionId === id) {
+          state.activeSessionId = null
         }
       })
     },

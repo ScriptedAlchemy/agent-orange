@@ -35,6 +35,8 @@ export interface GitHubContentBatchRequest {
   includeIssues?: FetchIssuesParams
   includePulls?: FetchPullRequestsParams
   includeStatuses?: boolean
+  prefetchIssueItems?: boolean
+  prefetchPullItems?: boolean
 }
 
 export interface GitHubContentItem {

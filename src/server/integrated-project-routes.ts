@@ -99,6 +99,8 @@ const GitHubContentRequestSchema = z.object({
   includeIssues: GitHubIssuesListParamsSchema.nullable().optional(),
   includePulls: GitHubPullsListParamsSchema.nullable().optional(),
   includeStatuses: z.boolean().optional(),
+  prefetchIssueItems: z.boolean().optional(),
+  prefetchPullItems: z.boolean().optional(),
 })
 
 const GitHubIssuesListRequestSchema = z.object({
@@ -405,8 +407,43 @@ const parseWorktreeOutput = (output: string, projectPath: string): ParsedWorktre
   })
 }
 
+// Optional external base directory for worktrees. Must remain within HOME/TMP.
+const WORKTREES_BASE_DIR = (() => {
+  const raw = process.env["AGENT_ORANGE_WORKTREES_DIR"]?.trim()
+  if (!raw) return null
+  // Tilde expansion
+  const expanded = raw.startsWith("~/") ? `${HOME_DIRECTORY}${raw.slice(1)}` : raw
+  const normalized = normalizePath(expanded)
+  // Enforce sandbox roots (HOME/TMP). If outside, ignore and fall back to default behavior.
+  const within =
+    normalized === HOME_DIRECTORY ||
+    normalized.startsWith(`${HOME_DIRECTORY}/`) ||
+    normalized === TMP_DIRECTORY ||
+    normalized.startsWith(`${TMP_DIRECTORY}/`)
+  return within ? normalized : null
+})()
+
+const slugifyFs = (value: string): string =>
+  (value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "project"
+
+const stripWorktreesPrefix = (p: string): string => p.replace(/^worktrees\/+/, "")
+
 const resolveWorktreePath = (projectPath: string, worktreePath: string) => {
   if (nodePath.isAbsolute(worktreePath)) return normalizePath(worktreePath)
+
+  // If an external base is configured, place worktrees under it using a
+  // project-scoped folder to avoid collisions across repos.
+  if (WORKTREES_BASE_DIR) {
+    const projectFolder = slugifyFs(nodePath.basename(projectPath))
+    const relative = stripWorktreesPrefix(worktreePath)
+    return normalizePath(nodePath.join(WORKTREES_BASE_DIR, projectFolder, relative))
+  }
+
+  // Default: relative to the project root
   return normalizePath(nodePath.join(projectPath, worktreePath))
 }
 
@@ -550,21 +587,9 @@ const buildWorktreeResponses = async (projectId: string): Promise<WorktreeRespon
     // If this is the primary worktree (the project root), prefer showing the git branch
     // as the title instead of a generic "(default)" suffix seeded at project creation.
     // Only override when the existing title looks like a default placeholder.
-    if (entry.isPrimary) {
-      const desired = entry.branch || "main"
-      const looksDefault =
-        !metadata.title ||
-        /\(default\)\s*$/i.test(metadata.title) ||
-        metadata.title.toLowerCase() === "default"
-      if (looksDefault && metadata.title !== desired) {
-        try {
-          projectManager.updateWorktreeTitle(projectId, metadata.id, desired)
-          metadata.title = desired
-        } catch {
-          // non-fatal; continue with existing title
-        }
-      }
-    }
+    // Do not override the default worktree title; it should remain "default".
+    // Branch information is exposed separately in the response and should be
+    // refreshed by the client UI as needed.
 
     // Fix isPrimary detection across platforms by comparing realpaths
     let effectiveIsPrimary = entry.isPrimary
@@ -1022,7 +1047,82 @@ export function addIntegratedProjectRoutes(app: Hono) {
               if (branchRef.startsWith("-")) {
                 return c.json({ error: "Invalid branch name" }, 400)
               }
-              args.push(branchRef)
+              let checkoutRef = branchRef
+
+              const remoteMatch = branchRef.match(/^(?<remote>[^/]+)\/(?<name>.+)$/)
+              if (remoteMatch) {
+                const remoteName = remoteMatch.groups?.remote ?? "origin"
+                const localBranchName = remoteMatch.groups?.name ?? branchRef
+
+                const verifyLocal = async () => {
+                  try {
+                    await execFileAsync(
+                      "git",
+                      ["show-ref", "--verify", `refs/heads/${localBranchName}`],
+                      { cwd: project.path }
+                    )
+                    return true
+                  } catch {
+                    return false
+                  }
+                }
+
+                const localExists = await verifyLocal()
+
+                if (!localExists) {
+                  try {
+                    await execFileAsync(
+                      "git",
+                      ["fetch", remoteName, localBranchName],
+                      { cwd: project.path, timeout: 20000 }
+                    )
+                  } catch (fetchError) {
+                    log.error("Failed to fetch remote branch", {
+                      remote: remoteName,
+                      branch: localBranchName,
+                      error: fetchError,
+                    })
+                    return c.json(
+                      {
+                        error: `Unable to fetch ${remoteName}/${localBranchName}. Ensure the branch exists and you have access.`,
+                      },
+                      400
+                    )
+                  }
+
+                  try {
+                    await execFileAsync(
+                      "git",
+                      ["branch", "--track", localBranchName, branchRef],
+                      { cwd: project.path }
+                    )
+                  } catch (trackError) {
+                    log.error("Failed to create tracking branch", {
+                      branch: localBranchName,
+                      remote: branchRef,
+                      error: trackError,
+                    })
+                    return c.json(
+                      {
+                        error: `Unable to create local branch ${localBranchName} tracking ${branchRef}.`,
+                      },
+                      400
+                    )
+                  }
+                }
+
+                checkoutRef = localBranchName
+              }
+
+              args.push(checkoutRef)
+              body.branch = checkoutRef
+            }
+
+            // Ensure parent directory exists when targeting an external base
+            try {
+              await nodeFs.mkdir(nodePath.dirname(resolvedPath), { recursive: true })
+            } catch {
+              // Non-fatal; git may still create the leaf directory
             }
 
             await execFileAsync("git", args, { cwd: project.path })
@@ -1370,6 +1470,8 @@ export function addIntegratedProjectRoutes(app: Hono) {
             includeIssues,
             includePulls,
             includeStatuses,
+            prefetchIssueItems,
+            prefetchPullItems,
           } = c.req.valid("json")
 
           const resolved = resolveProjectRecord(id)
@@ -1385,6 +1487,8 @@ export function addIntegratedProjectRoutes(app: Hono) {
               includeIssues: includeIssues ?? null,
               includePulls: includePulls ?? null,
               includeStatuses,
+              prefetchIssueItems,
+              prefetchPullItems,
             })
             return c.json(payload)
           } catch (error) {

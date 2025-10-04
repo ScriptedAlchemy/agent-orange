@@ -51,6 +51,8 @@ const DEFAULT_BRANCH_FALLBACK = "main"
 const SESSION_TITLE_MAX = 100
 const ISSUES_PAGE_DEFAULT = 10
 const ISSUES_PAGE_STEP = 10
+const PULLS_PAGE_DEFAULT = 10
+const PULLS_PAGE_STEP = 10
 
 const MARKDOWN_PLUGINS = [rehypeRaw, rehypeSanitize]
 
@@ -97,6 +99,10 @@ function getLabelStyle(label: GitHubLabel) {
 
 function buildActionKey(kind: "issue" | "pr", identifier: number, action: string) {
   return `${kind}-${identifier}-${action}`
+}
+
+function buildContentKey(kind: "issue" | "pull", identifier: number) {
+  return `${kind}:${identifier}`
 }
 
 function normalizeBranchName(branch: string) {
@@ -247,7 +253,13 @@ export default function GitHubIntegration() {
   const [actionStates, setActionStates] = useState<Record<string, boolean>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [issuePageSize, setIssuePageSize] = useState(ISSUES_PAGE_DEFAULT)
+  const [pullPageSize, setPullPageSize] = useState(PULLS_PAGE_DEFAULT)
   const [expandedIssues, setExpandedIssues] = useState<Record<number, boolean>>({})
+  const [expandedPulls, setExpandedPulls] = useState<Record<number, boolean>>({})
+  const [lazyContentItems, setLazyContentItems] = useState<Record<string, GitHubContentItem>>({})
+  const [lazyErrors, setLazyErrors] = useState<Record<string, GitHubContentErrorItem>>({})
+  const [lazyLoading, setLazyLoading] = useState<Record<string, boolean>>({})
+  const [statusOverrides, setStatusOverrides] = useState<Record<number, PullRequestStatusSummary | null>>({})
   const resolvedWorktreeId = worktreeId || "default"
 
   const gitStatusQuery = useQuery<GitStatusResponse>({
@@ -269,8 +281,16 @@ export default function GitHubIntegration() {
     if (!projectId || !repoRef) {
       return null
     }
-    return ["github", "content", projectId, repoRef.owner, repoRef.repo, issuePageSize] as const
-  }, [projectId, repoRef, issuePageSize])
+    return [
+      "github",
+      "content",
+      projectId,
+      repoRef.owner,
+      repoRef.repo,
+      issuePageSize,
+      pullPageSize,
+    ] as const
+  }, [projectId, repoRef, issuePageSize, pullPageSize])
 
   const contentQuery = useQuery<GitHubContentBatchResponse>({
     queryKey: contentQueryKey ?? ["github", "content", "disabled"],
@@ -284,8 +304,10 @@ export default function GitHubIntegration() {
         request: {
           repo: repoRef,
           includeIssues: { state: "open", perPage: issuePageSize },
-          includePulls: { state: "open", perPage: 30 },
+          includePulls: { state: "open", perPage: pullPageSize },
           includeStatuses: true,
+          prefetchIssueItems: false,
+          prefetchPullItems: false,
         },
         signal,
       })
@@ -304,13 +326,50 @@ export default function GitHubIntegration() {
     () => contentQuery.data?.pulls ?? [],
     [contentQuery.data?.pulls]
   )
-  const statusMap = useMemo<PullRequestStatusMap>(
-    () => contentQuery.data?.statuses ?? {},
-    [contentQuery.data?.statuses]
-  )
+  const statusMap = useMemo<PullRequestStatusMap>(() => {
+    const base = contentQuery.data?.statuses ?? {}
+    if (!Object.keys(statusOverrides).length) {
+      return base
+    }
+    const merged: PullRequestStatusMap = { ...base }
+    for (const [key, value] of Object.entries(statusOverrides)) {
+      const numericKey = Number(key)
+      if (!Number.isNaN(numericKey)) {
+        merged[numericKey] = value
+      }
+    }
+    return merged
+  }, [contentQuery.data?.statuses, statusOverrides])
 
-  const contentItems = useMemo(() => contentQuery.data?.items ?? [], [contentQuery.data?.items])
-  const contentErrors = useMemo(() => contentQuery.data?.errors ?? [], [contentQuery.data?.errors])
+  const contentItems = useMemo(() => {
+    const baseItems = contentQuery.data?.items ?? []
+    if (!Object.keys(lazyContentItems).length) {
+      return baseItems
+    }
+    const map = new Map<string, GitHubContentItem>()
+    for (const item of baseItems) {
+      map.set(buildContentKey(item.type, item.number), item)
+    }
+    for (const item of Object.values(lazyContentItems)) {
+      map.set(buildContentKey(item.type, item.number), item)
+    }
+    return Array.from(map.values())
+  }, [contentQuery.data?.items, lazyContentItems])
+
+  const contentErrors = useMemo(() => {
+    const baseErrors = contentQuery.data?.errors ?? []
+    if (!Object.keys(lazyErrors).length) {
+      return baseErrors
+    }
+    const map = new Map<string, GitHubContentErrorItem>()
+    for (const error of baseErrors) {
+      map.set(`${error.type}:${error.number}`, error)
+    }
+    for (const [key, error] of Object.entries(lazyErrors)) {
+      map.set(key, error)
+    }
+    return Array.from(map.values())
+  }, [contentQuery.data?.errors, lazyErrors])
 
   const issueContentMap = useMemo(() => {
     const map: Record<number, GitHubContentItem> = {}
@@ -470,18 +529,146 @@ export default function GitHubIntegration() {
   const anyActionInFlight = Object.values(actionStates).some(Boolean)
   const repoLabel = repoRef ? `${repoRef.owner}/${repoRef.repo}` : null
   const showLoadMoreIssues = issues.length >= issuePageSize
+  const showLoadMorePulls = pullRequests.length >= pullPageSize
 
   const handleLoadMoreIssues = useCallback(() => {
     setIssuePageSize((prev) => prev + ISSUES_PAGE_STEP)
   }, [])
 
-  const toggleIssueExpansion = useCallback((issueNumber: number) => {
-    setExpandedIssues((prev) => ({ ...prev, [issueNumber]: !prev[issueNumber] }))
+  const handleLoadMorePulls = useCallback(() => {
+    setPullPageSize((prev) => prev + PULLS_PAGE_STEP)
   }, [])
+
+  const loadContentItem = useCallback(
+    async (type: "issue" | "pull", number: number) => {
+      if (!projectId || !repoRef) {
+        return
+      }
+
+      const key = buildContentKey(type, number)
+
+      if (lazyContentItems[key]) {
+        return
+      }
+
+      let shouldFetch = false
+      setLazyLoading((prev) => {
+        if (prev[key]) {
+          return prev
+        }
+        shouldFetch = true
+        return { ...prev, [key]: true }
+      })
+
+      if (!shouldFetch) {
+        return
+      }
+
+      setLazyErrors((prev) => {
+        if (!(key in prev)) {
+          return prev
+        }
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+
+      try {
+        const response = await fetchGitHubContent({
+          projectId,
+          request: {
+            repo: repoRef,
+            items: [{ type, number }],
+            includeStatuses: type === "pull",
+          },
+        })
+
+        const item = response.items.find(
+          (entry) => entry.type === type && entry.number === number
+        )
+
+        if (item) {
+          setLazyContentItems((prev) => ({ ...prev, [key]: item }))
+          if (type === "pull") {
+            const nextStatus = response.statuses?.[number] ?? item.status ?? null
+            setStatusOverrides((prev) => ({ ...prev, [number]: nextStatus }))
+          }
+          return
+        }
+
+        const fallbackError =
+          response.errors.find((error) => error.type === type && error.number === number) ??
+          null
+
+        if (fallbackError) {
+          setLazyErrors((prev) => ({ ...prev, [key]: fallbackError }))
+        } else {
+          setLazyErrors((prev) => ({
+            ...prev,
+            [key]: {
+              type,
+              number,
+              message: "No content available",
+              cached: false,
+            },
+          }))
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load GitHub content"
+        setLazyErrors((prev) => ({
+          ...prev,
+          [key]: {
+            type,
+            number,
+            message,
+            cached: false,
+          },
+        }))
+      } finally {
+        setLazyLoading((prev) => {
+          if (!prev[key]) {
+            return prev
+          }
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+      }
+    },
+    [projectId, repoRef, lazyContentItems]
+  )
+
+  const toggleIssueExpansion = useCallback(
+    (issueNumber: number) => {
+      const nextValue = !(expandedIssues[issueNumber] ?? false)
+      setExpandedIssues((prev) => ({ ...prev, [issueNumber]: nextValue }))
+      if (nextValue) {
+        void loadContentItem("issue", issueNumber)
+      }
+    },
+    [expandedIssues, loadContentItem]
+  )
+
+  const togglePullExpansion = useCallback(
+    (pullNumber: number) => {
+      const nextValue = !(expandedPulls[pullNumber] ?? false)
+      setExpandedPulls((prev) => ({ ...prev, [pullNumber]: nextValue }))
+      if (nextValue) {
+        void loadContentItem("pull", pullNumber)
+      }
+    },
+    [expandedPulls, loadContentItem]
+  )
 
   useEffect(() => {
     setIssuePageSize(ISSUES_PAGE_DEFAULT)
+    setPullPageSize(PULLS_PAGE_DEFAULT)
     setExpandedIssues({})
+    setExpandedPulls({})
+    setLazyContentItems({})
+    setLazyErrors({})
+    setLazyLoading({})
+    setStatusOverrides({})
   }, [repoRef?.owner, repoRef?.repo])
 
   const repositoryTabs = useMemo(
@@ -650,15 +837,17 @@ export default function GitHubIntegration() {
                         const researchLoading = actionStates[actionResearchKey]
                         const issueContent = issueContentMap[issue.number]
                         const issueError = contentErrorMap.get(`issue:${issue.number}`)
+                        const issueKey = buildContentKey("issue", issue.number)
                         const issueDescription = issueContent?.item.body ?? issue.body ?? ""
                         const issueComments: CommentDisplay[] = issueContent
                           ? issueContent.comments.map((comment) => ({ ...comment }))
                           : []
-                        const issueLoading = isContentFetching && !issueContent
+                        const issueLoading =
+                          (isContentFetching && !issueContent) || Boolean(lazyLoading[issueKey])
                         const isIssueExpanded = expandedIssues[issue.number] ?? false
                         const issuePreview = createPreview(issueDescription)
                         const issueCreatedRelative = formatRelativeDate(issue.created_at)
-                        const commentCount = issueComments.length
+                        const commentCount = issueContent ? issueComments.length : null
 
                         return (
                           <div key={issue.id} className="bg-background">
@@ -685,7 +874,12 @@ export default function GitHubIntegration() {
                                     {issueCreatedRelative ? ` opened ${issueCreatedRelative}` : ""}
                                   </span>
                                   <span className="flex items-center gap-1">
-                                    <MessageSquare className="h-3.5 w-3.5" /> {commentCount}
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                    {issueLoading && !issueContent ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <span>{commentCount ?? "–"}</span>
+                                    )}
                                   </span>
                                   <div className="flex flex-wrap gap-1">
                                     {issue.labels.slice(0, 3).map((label) => (
@@ -727,11 +921,11 @@ export default function GitHubIntegration() {
                                   ) : null}
                                   Fix with AI
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => toggleIssueExpansion(issue.number)}
-                                >
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => toggleIssueExpansion(issue.number)}
+                              >
                                   {isIssueExpanded ? (
                                     <>
                                       Show less{" "}
@@ -869,17 +1063,46 @@ export default function GitHubIntegration() {
                         diff: comment.diff_hunk,
                       }))
                     : []
-                  const pullLoading = isContentFetching && !pullContent
+                  const pullKey = buildContentKey("pull", pullRequest.number)
+                  const pullLoading =
+                    (isContentFetching && !pullContent) || Boolean(lazyLoading[pullKey])
+                  const isPullExpanded = expandedPulls[pullRequest.number] ?? false
+                  const pullPreview = createPreview(pullDescription)
 
                   return (
                     <Card key={pullRequest.id}>
-                      <CardHeader className="flex flex-col gap-2">
+                      <CardHeader className="flex flex-col gap-3">
                         <div className="flex flex-wrap items-start justify-between gap-2">
                           <CardTitle className="text-base font-semibold">
                             #{pullRequest.number} · {pullRequest.title}
                           </CardTitle>
-                          {renderStatusIndicator(status)}
+                          <div className="flex flex-wrap items-center gap-2">
+                            {renderStatusIndicator(status)}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => togglePullExpansion(pullRequest.number)}
+                            >
+                              {pullLoading ? (
+                                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                              ) : null}
+                              {isPullExpanded ? (
+                                <>
+                                  Show less{" "}
+                                  <ChevronDown className="ml-1 h-3 w-3 rotate-180 transition-transform" />
+                                </>
+                              ) : (
+                                <>
+                                  Show more{" "}
+                                  <ChevronDown className="ml-1 h-3 w-3 transition-transform" />
+                                </>
+                              )}
+                            </Button>
+                          </div>
                         </div>
+                        {!isPullExpanded && pullPreview ? (
+                          <p className="text-muted-foreground text-sm">{pullPreview}</p>
+                        ) : null}
                         <div className="text-muted-foreground flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-3">
                             <Avatar className="h-8 w-8">
@@ -900,65 +1123,12 @@ export default function GitHubIntegration() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             {labels.map((label) => (
                               <Badge key={label.id} variant="outline" style={getLabelStyle(label)}>
                                 {label.name}
                               </Badge>
                             ))}
-                          </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="space-y-2">
-                          <div className="text-muted-foreground text-xs font-semibold uppercase">
-                            Description
-                          </div>
-                          {pullDescription.trim() ? (
-                            <MarkdownRenderer content={pullDescription} />
-                          ) : pullLoading ? (
-                            <div className="text-muted-foreground flex items-center gap-2 text-sm">
-                              <Loader2 className="h-4 w-4 animate-spin" /> Loading description…
-                            </div>
-                          ) : (
-                            <p className="text-muted-foreground text-sm italic">
-                              No description provided.
-                            </p>
-                          )}
-                        </div>
-                        <div className="space-y-2">
-                          <div className="text-muted-foreground text-xs font-semibold uppercase">
-                            Comments
-                          </div>
-                          {pullError ? (
-                            <div className="text-destructive flex items-center gap-2 text-sm">
-                              <AlertCircle className="h-4 w-4" /> {pullError.message}
-                            </div>
-                          ) : pullLoading && !pullComments.length ? (
-                            <div className="text-muted-foreground flex items-center gap-2 text-sm">
-                              <Loader2 className="h-4 w-4 animate-spin" /> Loading comments…
-                            </div>
-                          ) : pullComments.length > 0 ? (
-                            <GitHubCommentList comments={pullComments} />
-                          ) : (
-                            <p className="text-muted-foreground text-sm italic">No comments yet.</p>
-                          )}
-                        </div>
-                        {reviewComments.length > 0 ? (
-                          <div className="space-y-2">
-                            <div className="text-muted-foreground text-xs font-semibold uppercase">
-                              Review Comments
-                            </div>
-                            <GitHubCommentList comments={reviewComments} />
-                          </div>
-                        ) : null}
-                        {pullContent?.warning ? (
-                          <div className="flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-                            <AlertCircle className="h-4 w-4" /> {pullContent.warning}
-                          </div>
-                        ) : null}
-                        <div className="text-muted-foreground flex flex-col gap-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                          <div className="flex items-center gap-2">
                             <a
                               href={pullRequest.html_url ?? undefined}
                               target="_blank"
@@ -967,8 +1137,6 @@ export default function GitHubIntegration() {
                             >
                               View on GitHub <ExternalLink className="h-3 w-3" />
                             </a>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
                             {showFixButton ? (
                               <Button
                                 size="sm"
@@ -987,10 +1155,78 @@ export default function GitHubIntegration() {
                             )}
                           </div>
                         </div>
-                      </CardContent>
+                      </CardHeader>
+                      {isPullExpanded ? (
+                        <CardContent className="space-y-4">
+                          <div className="space-y-2">
+                            <div className="text-muted-foreground text-xs font-semibold uppercase">
+                              Description
+                            </div>
+                            {pullDescription.trim() ? (
+                              <MarkdownRenderer content={pullDescription} />
+                            ) : pullLoading ? (
+                              <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                                <Loader2 className="h-4 w-4 animate-spin" /> Loading description…
+                              </div>
+                            ) : (
+                              <p className="text-muted-foreground text-sm italic">
+                                No description provided.
+                              </p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <div className="text-muted-foreground text-xs font-semibold uppercase">
+                              Comments
+                            </div>
+                            {pullError ? (
+                              <div className="text-destructive flex items-center gap-2 text-sm">
+                                <AlertCircle className="h-4 w-4" /> {pullError.message}
+                              </div>
+                            ) : pullLoading && !pullComments.length ? (
+                              <div className="text-muted-foreground flex items-center gap-2 text-sm">
+                                <Loader2 className="h-4 w-4 animate-spin" /> Loading comments…
+                              </div>
+                            ) : pullComments.length > 0 ? (
+                              <GitHubCommentList comments={pullComments} />
+                            ) : (
+                              <p className="text-muted-foreground text-sm italic">No comments yet.</p>
+                            )}
+                          </div>
+                          {reviewComments.length > 0 ? (
+                            <div className="space-y-2">
+                              <div className="text-muted-foreground text-xs font-semibold uppercase">
+                                Review Comments
+                              </div>
+                              <GitHubCommentList comments={reviewComments} />
+                            </div>
+                          ) : null}
+                          {pullContent?.warning ? (
+                            <div className="flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+                              <AlertCircle className="h-4 w-4" /> {pullContent.warning}
+                            </div>
+                          ) : null}
+                        </CardContent>
+                      ) : null}
                     </Card>
                   )
                 })}
+                {showLoadMorePulls ? (
+                  <div className="flex justify-center">
+                    <Button
+                      variant="outline"
+                      onClick={handleLoadMorePulls}
+                      disabled={contentQuery.isRefetching}
+                    >
+                      {contentQuery.isRefetching ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
+                        </>
+                      ) : (
+                        "Load more pull requests"
+                      )}
+                    </Button>
+                  </div>
+                ) : null}
               </section>
             )}
           </div>

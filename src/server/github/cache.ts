@@ -127,6 +127,8 @@ export interface GitHubContentBatchOptions {
   includeIssues?: GitHubIssuesListParams | null
   includePulls?: GitHubPullsListParams | null
   includeStatuses?: boolean
+  prefetchIssueItems?: boolean
+  prefetchPullItems?: boolean
   mode?: "normal" | "warmup"
 }
 
@@ -774,6 +776,8 @@ export async function fetchGitHubContentBatch(
     includeIssues,
     includePulls,
     includeStatuses = true,
+    prefetchIssueItems = true,
+    prefetchPullItems = true,
     mode = "normal",
   } = options
 
@@ -802,26 +806,30 @@ export async function fetchGitHubContentBatch(
 
   if (effectiveIssueParams) {
     issuesList = await loadIssueList(repo, effectiveIssueParams, ttlOverrides, client)
-    requestedItems = mergeItems(
-      requestedItems,
-      issuesList.map((issue) => ({
-        type: "issue" as const,
-        number: issue.number,
-        updatedAt: issue.updated_at,
-      }))
-    )
+    if (prefetchIssueItems) {
+      requestedItems = mergeItems(
+        requestedItems,
+        issuesList.map((issue) => ({
+          type: "issue" as const,
+          number: issue.number,
+          updatedAt: issue.updated_at,
+        }))
+      )
+    }
   }
 
   if (effectivePullParams) {
     pullsList = await loadPullList(repo, effectivePullParams, ttlOverrides, client)
-    requestedItems = mergeItems(
-      requestedItems,
-      pullsList.map((pull) => ({
-        type: "pull" as const,
-        number: pull.number,
-        updatedAt: pull.updated_at,
-      }))
-    )
+    if (prefetchPullItems) {
+      requestedItems = mergeItems(
+        requestedItems,
+        pullsList.map((pull) => ({
+          type: "pull" as const,
+          number: pull.number,
+          updatedAt: pull.updated_at,
+        }))
+      )
+    }
   }
 
   if (!requestedItems.length) {
@@ -1191,6 +1199,32 @@ export async function fetchGitHubContentBatch(
           status: includeStatuses ? (pending.cached.statusSummary ?? null) : undefined,
           warning: "Unable to refresh pull request status",
         })
+      }
+    }
+  }
+
+  if (includeStatuses && !prefetchPullItems && pullsList.length > 0) {
+    const missingNumbers = pullsList
+      .map((pull) => pull.number)
+      .filter((number) => statuses[number] === undefined)
+
+    if (missingNumbers.length > 0) {
+      try {
+        const statusMap = await client.getPullRequestStatusesBatch(repo, missingNumbers)
+        for (const number of missingNumbers) {
+          statuses[number] = statusMap.get(number) ?? null
+        }
+      } catch (error) {
+        cacheLog.warn("Failed to fetch pull request statuses for list", {
+          repo: `${repo.owner}/${repo.repo}`,
+          count: missingNumbers.length,
+          error,
+        })
+        for (const number of missingNumbers) {
+          if (statuses[number] === undefined) {
+            statuses[number] = null
+          }
+        }
       }
     }
   }

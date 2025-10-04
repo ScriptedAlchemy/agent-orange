@@ -94,7 +94,7 @@ export function CreateSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-[min(92vw,720px)] sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Launch CLI Session</DialogTitle>
           <DialogDescription>
@@ -105,7 +105,7 @@ export function CreateSessionDialog({
           <div className="space-y-2">
             <Label htmlFor="worktree">Worktree</Label>
             <Select value={worktreeId} onValueChange={setWorktreeId}>
-              <SelectTrigger id="worktree">
+              <SelectTrigger id="worktree" className="whitespace-normal text-left">
                 <SelectValue placeholder="Select worktree" />
               </SelectTrigger>
               <SelectContent>
@@ -127,7 +127,7 @@ export function CreateSessionDialog({
           <div className="space-y-2">
             <Label htmlFor="tool">Tool Preset</Label>
             <Select value={tool} onValueChange={setTool}>
-              <SelectTrigger id="tool">
+              <SelectTrigger id="tool" className="whitespace-normal text-left">
                 <SelectValue placeholder="Select tool" />
               </SelectTrigger>
               <SelectContent>
@@ -152,6 +152,7 @@ export function CreateSessionDialog({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={`${tool}:${worktreeId}`}
+              className="font-mono text-sm break-all"
             />
           </div>
         </div>
